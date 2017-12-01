@@ -1,0 +1,615 @@
+<!-- Graphics Example Code.  index.html - The web page document containing the canvas (drawing surface), that launches your javascript files.  By Garett //-->
+<!DOCTYPE html> <html> <head> <meta charset="UTF-8"/> <link rel="icon" href="assets/fav.ico">
+<script type="text/javascript" src="tinywebgl-ucla.js" ></script>  <!--  Javascript "include" files.  Any code in them gets executed as part of the page loading. //-->
+<script type="text/javascript" src="dependencies.js"   ></script>
+<script type="text/javascript"> "use strict"    
+  window.onload = function init()        // ********************* THE ENTRY POINT OF THE WHOLE PROGRAM STARTS HERE ********************* 
+    { window.contexts = {};                                                            // A global variable, "contexts".  Browsers support up to 16 WebGL contexts per page.
+      
+      const scenes  = [ "Cup_Pong", "Movement_Controls", "Global_Info_Table" ]; // Register some scenes to the "Canvas_Manager" object -- which WebGL calls
+                                                                                       // upon every time a draw / keyboard / mouse event happens.  
+      
+      if( eval( "typeof " + scenes[0] ) !== "undefined" )
+      { document.getElementById( "canvases" ).appendChild( Object.assign( document.createElement( "canvas" ), { id: "main_canvas", width: 800, height: 600 } ) );
+        contexts[ "main_canvas" ] = new Canvas_Manager( "main_canvas", Color.of( 0,0,0,1 ), scenes );   // Manage the WebGL canvas.  Second parameter sets background color.
+        for( let c in contexts ) contexts[ c ].render();     // Call render() for each WebGL context on this page.  Then render() will re-queue itself for more calls.
+        
+        //Code_Manager.display_code( eval( scenes[0] ) );                                  // Display the code for our demo on the page, starting with the first scene in the list.
+        for( let list of [ core_dependencies, all_dependencies ] )
+        document.querySelector( "#class_list" ).rows[2].appendChild( Object.assign( document.createElement( "td" ), { 
+          innerHTML: list.reduce( (acc, x) => acc += "<a href='javascript:void(0);' onclick='Code_Manager.display_code(" + x + ")'>" + x + "</a><br>", "" ) } ) );        
+        document.getElementsByName( "main_demo_link" )[0].innerHTML = "<a href='javascript:void(0);' onclick='Code_Manager.display_code(" + scenes[0] + ")'>" + scenes[0] + "</a><br>";
+        document.querySelector("#code_display").innerHTML = "Below is the code for the demo that's running:<br>&nbsp;<br>" + document.querySelector("#code_display").innerHTML;             
+      }
+      
+      document.querySelector("#edit_button").addEventListener('click', () => {
+        code_panel.style.display=class_list.style.display='none'; new_demo_source_code.style.display='block'; 
+        document.getElementsByName( 'new_demo_code' )[0].value=code_display.dataset.displayed.toString() } )
+      const form = document.forms.namedItem("new_demo_source_code");
+      form.addEventListener('submit', function(event) 
+        { if( document.getElementsByName( "finished" )[0].checked )
+            alert( "Your demo will be submitted.  If approved, you will start being asked for a password to make any further updates to it.  This password "
+                 + "will appear right now, below the submit button, and then (assuming submission worked) it will never appear again.  Write it down." );
+          var xhr = new XMLHttpRequest();
+          xhr.open("POST", "/submit-demo?Unapproved", true);
+          xhr.responseType = "json";
+          xhr.onload = function(event) 
+          { if (xhr.status != 200) { document.querySelector("#submit_result").textContent = "Error " + xhr.status + " when trying to upload."; return }
+            document.querySelector("#submit_result").textContent = this.response.message;
+            // if( this.response.hide_finished_checkbox ) { document.getElementsByName( "finished" )[0].checked = false; expert_panel.style.display = "none" }
+            if( this.response.show_password  ) document.getElementsByName( "password" )[0] .style.display = "inline";
+            if( this.response.show_overwrite ) document.querySelector( "#overwrite_panel" ).style.display = "inline";
+          };
+          xhr.setRequestHeader("Content-Type", "application/json");
+          xhr.send( JSON.stringify( Array.from( form.elements ).reduce( ( accum, elem ) => 
+            { if( elem.value && !( ['checkbox', 'radio'].includes(elem.type) && !elem.checked ) ) accum[elem.name] = elem.value; return accum }, {} ) ) );
+          event.preventDefault();
+        }, false);      
+    }
+
+// Below is the demo you will see when you run the program!    
+  
+class Cup_Pong extends Scene_Component  // An example of a Scene_Component that our class Canvas_Manager can manage.  Like most, this one draws 3D shapes.
+{ constructor( context )
+    { super( context );
+      var shapes = { 'triangle'        : new Triangle(),                            // At the beginning of our program, instantiate all shapes we plan to use,
+                     'strip'           : new Square(),                              // each with only one instance in the graphics card's memory.
+                     'bad_tetrahedron' : new Tetrahedron( false ),                  // For example we would only create one "cube" blueprint in the GPU, but then 
+                     'tetrahedron'     : new Tetrahedron( true ),                   // re-use it many times per call to display to get multiple cubes in the scene.
+                     'windmill'        : new Windmill( 10 ),
+                     'cup'             : new FullCup(),
+                     'table'           : new Table(),
+                     'square'          : new Square(),
+                     'disk'            : new Disk(),
+                     'sphere'          : new Subdivision_Sphere( 4 ),
+                     'cube'            : new Cube(),
+                     'text'            : new Text_Line( 35 ),
+                     'limb'            : new TableLeg( 20, 1 ) };
+      this.submit_shapes( context, shapes );
+      
+       // Place the camera, which is stored in a scratchpad for globals.  Secondly, setup the projection:  The matrix that determines how depth is treated.  It projects 3D points onto a plane.
+      Object.assign( context.globals.graphics_state, { camera_transform: Mat4.translation([ 0, -5,-30 ]).times(Mat4.rotation(.3, Vec.of(1,0,0))), projection_transform: Mat4.perspective( Math.PI/4, context.width/context.height, .1, 1000 ), thrown: 0 } );
+      
+      // *** Materials: *** Declare new ones as temps when needed; they're just cheap wrappers for some numbers.  1st parameter:  Color (4 floats in RGBA format),
+      // 2nd: Ambient light, 3rd: Diffuse reflectivity, 4th: Specular reflectivity, 5th: Smoothness exponent, 6th: Optional texture object, leave off for un-textured.
+      Object.assign( this, { purplePlastic: context.get_instance( Phong_Model  ).material( Color.of( .9,.5,.9, 1 ), .4, .4, .8, 40 ),
+                             redPlastic: context.get_instance( Phong_Model  ).material( Color.of( 1,.1,0, 1 ), .4, .4, .8, 40 ),
+                             whitePlastic: context.get_instance( Phong_Model  ).material( Color.of( 1,1,1, 1 ), .5, .4, .8, 40 ),
+                             bluePlastic: context.get_instance( Phong_Model  ).material( Color.of( 0,.1,1, 1 ), .4, .4, .8, 40 ),
+                             greenPlastic: context.get_instance( Phong_Model  ).material( Color.of( 0,1,.1, 1 ), .4, .4, .8, 40 ),
+                             yellowPlastic: context.get_instance( Phong_Model  ).material( Color.of( 1,1,0, 1 ), .5, .6, .8, 40 ),
+                             blackPlastic: context.get_instance( Phong_Model  ).material( Color.of( .15,.15,.15, 1 ), .4, .4, .8, 40 ),
+                             pong: context.get_instance( Phong_Model  ).material( Color.of( 1,1,1, 1 ), .4, .7, 0, 40 ),
+                             greyPlastic  : context.get_instance( Phong_Model  ).material( Color.of( .5,.5,.5, 1 ), .4, .8, .4, 20 ),   // Smaller exponent means 
+                             greyWall  : context.get_instance( Phong_Model  ).material( Color.of( .5,.5,.55, 1 ), .5, .8, .3, 10 ),   // Smaller exponent means 
+                             skin  : context.get_instance( Phong_Model  ).material( Color.of( 1,.7,.4, 1 ), .7, .4, .2, 20 ),   // Smaller exponent means 
+                             skin2  : context.get_instance( Phong_Model  ).material( Color.of( 1,.7,.4, 1 ), .2, .4, .2, 20 ),   // Smaller exponent means 
+                             skin3  : context.get_instance( Phong_Model  ).material( Color.of( 1,.8,.4, 1 ), .8, .4, .2, 20 ),   // Smaller exponent means 
+                             blueGlass    : context.get_instance( Phong_Model  ).material( Color.of( .5,.5, 1,.2 ), .4, .8, .4, 40 ),   // a bigger shiny spot.
+                             fire         : context.get_instance( Funny_Shader ).material(),
+                             wood        : context.get_instance( Phong_Model  ).material( Color.of( 0,0,0,1 ), 1, .5, .5, 20, context.get_instance( "assets/wood.png" ) ),
+                             wood2        : context.get_instance( Phong_Model  ).material( Color.of( 0,0,0,1 ), 1, 1, 1, 40, context.get_instance( "assets/wood2.png" ) ),
+                             chad        : context.get_instance( Phong_Model  ).material( Color.of( 0,0,0,1 ), 1, .4, .2, 40, context.get_instance( "assets/chad.png" ) ),
+                             madchad        : context.get_instance( Phong_Model  ).material( Color.of( 0,0,0,1 ), 1, .4, .2, 40, context.get_instance( "assets/madchad.png" ) ),
+                             brad        : context.get_instance( Phong_Model  ).material( Color.of( 0,0,0,1 ), 1, .4, .2, 40, context.get_instance( "assets/brad.png" ) ),
+                             madbrad        : context.get_instance( Phong_Model  ).material( Color.of( 0,0,0,1 ), 1, .4, .2, 40, context.get_instance( "assets/madbrad.png" ) ),
+                             tad        : context.get_instance( Phong_Model  ).material( Color.of( 0,0,0,1 ), 1, .4, .2, 40, context.get_instance( "assets/tad.png" ) ),
+                             madtad        : context.get_instance( Phong_Model  ).material( Color.of( 0,0,0,1 ), 1, .4, .2, 40, context.get_instance( "assets/madtad.png" ) ),
+                             text_image    : context.get_instance( Phong_Model  ).material( Color.of( 0,0,0,1 ), 1, 0, 0, 1, context.get_instance( "assets/text_image.png" ) ),
+                             wall        : context.get_instance( Phong_Model  ).material( Color.of( 0,0,0,1 ), .8, .9, .2, 20, context.get_instance( "assets/wall.png" ) ) } );                             
+    }
+  
+    draw_cup( graphics_state, model_transform )
+      { 
+        this.shapes.cup.draw( graphics_state, model_transform, this.redPlastic );
+        this.shapes.cup.draw( graphics_state, model_transform.times(Mat4.scale([0.95, 0.95, 0.95])).times(Mat4.translation([ 0, 0.001, 0 ])), this.whitePlastic );
+       }
+
+    draw_limb( graphics_state, model_transform, color )
+      {
+        this.shapes.limb.draw( graphics_state, model_transform, color );
+        this.shapes.sphere.draw( graphics_state, model_transform.times(Mat4.translation([0,1,0])).times(Mat4.scale([.5,.25,.5])), color );
+        this.shapes.sphere.draw( graphics_state, model_transform.times(Mat4.scale([.5,.25,.5])), color );
+      } 
+
+    check_cups( cup_coords, model_transform, cups )
+      {
+        var checker = Mat4.identity();
+        var x = Mat4.identity();
+        var y = Mat4.identity();
+        for( let i of [0,1,2,3,4,5,6,7,8,9] ) {
+          switch(i) {
+            case 0: {
+              checker = model_transform.times(cup_coords[0]).times(Mat4.translation([-1,0,-6]));
+              x = (checker.times(Vec.of(0,0,0,1))).to3();
+              y = (cup_coords[0].times(Vec.of(0,0,0,1))).to3();
+              if( Math.sqrt(Math.pow((x[0] - y[0]),2) + Math.pow((x[2] - y[2]),2)) < 4 ) {
+                if (cups[i]==1) {
+                  cups[i]=0; 
+                  return 1; }
+                else
+                  return 0; }
+              break;
+              }
+            case 1: {
+              checker = model_transform.times(cup_coords[1]).times(Mat4.translation([-.5,0,-6]));
+              x = (checker.times(Vec.of(0,0,0,1))).to3();
+              y = (cup_coords[1].times(Vec.of(0,0,0,1))).to3();
+              if( Math.sqrt(Math.pow((x[0] - y[0]),2) + Math.pow((x[2] - y[2]),2)) < 4 ) {
+                if (cups[i]==1) {
+                  cups[i]=0; 
+                  return 1; }
+                else
+                  return 0; }
+              break;
+              }
+            case 2: {
+              checker = model_transform.times(cup_coords[2]).times(Mat4.translation([.5,0,-6]));
+              x = (checker.times(Vec.of(0,0,0,1))).to3();
+              y = (cup_coords[2].times(Vec.of(0,0,0,1))).to3();
+              if( Math.sqrt(Math.pow((x[0] - y[0]),2) + Math.pow((x[2] - y[2]),2)) < 4 ) {
+                if (cups[i]==1) {
+                  cups[i]=0; 
+                  return 1; }
+                else
+                  return 0; }
+              break;
+              }
+            case 3: {
+              checker = model_transform.times(cup_coords[3]).times(Mat4.translation([1,0,-6]));
+              x = (checker.times(Vec.of(0,0,0,1))).to3();
+              y = (cup_coords[3].times(Vec.of(0,0,0,1))).to3();
+              if( Math.sqrt(Math.pow((x[0] - y[0]),2) + Math.pow((x[2] - y[2]),2)) < 4 ) {
+                if (cups[i]==1) {
+                  cups[i]=0; 
+                  return 1; }
+                else
+                  return 0; }
+              break;
+              }
+            case 4: {
+              checker = model_transform.times(cup_coords[4]).times(Mat4.translation([.5,0,-4]));
+              x = (checker.times(Vec.of(0,0,0,1))).to3();
+              y = (cup_coords[4].times(Vec.of(0,0,0,1))).to3();
+              if( Math.sqrt(Math.pow((x[0] - y[0]),2) + Math.pow((x[2] - y[2]),2)) < 4 ) {
+                if (cups[i]==1) {
+                  cups[i]=0; 
+                  return 1; }
+                else
+                  return 0; }
+              break;
+              }
+            case 5: {
+              checker = model_transform.times(cup_coords[5]).times(Mat4.translation([0,0,-4]));
+              x = (checker.times(Vec.of(0,0,0,1))).to3();
+              y = (cup_coords[5].times(Vec.of(0,0,0,1))).to3();
+              if( Math.sqrt(Math.pow((x[0] - y[0]),2) + Math.pow((x[2] - y[2]),2)) < 4 ) {
+                if (cups[i]==1) {
+                  cups[i]=0; 
+                  return 1; }
+                else
+                  return 0; }
+              break;
+              }
+            case 6: {
+              checker = model_transform.times(cup_coords[6]).times(Mat4.translation([-.5,0,-4]));
+              x = (checker.times(Vec.of(0,0,0,1))).to3();
+              y = (cup_coords[6].times(Vec.of(0,0,0,1))).to3();
+              if( Math.sqrt(Math.pow((x[0] - y[0]),2) + Math.pow((x[2] - y[2]),2)) < 4 ) {
+                if (cups[i]==1) {
+                  cups[i]=0; 
+                  return 1; }
+                else
+                  return 0; }
+              break;
+              }
+            case 7: {    
+              checker = model_transform.times(cup_coords[7]).times(Mat4.translation([0,0,-4]));
+              x = (checker.times(Vec.of(0,0,0,1))).to3();
+              y = (cup_coords[7].times(Vec.of(0,0,0,1))).to3();
+              if( Math.sqrt(Math.pow((x[0] - y[0]),2) + Math.pow((x[2] - y[2]),2)) < 4 ) {
+                if (cups[i]==1) {
+                  cups[i]=0; 
+                  return 1; }
+                else
+                  return 0; }
+              break;
+              }
+            case 8: {
+              checker = model_transform.times(cup_coords[8]).times(Mat4.translation([0,0,-4]));
+              x = (checker.times(Vec.of(0,0,0,1))).to3();
+              y = (cup_coords[8].times(Vec.of(0,0,0,1))).to3();
+              if( Math.sqrt(Math.pow((x[0] - y[0]),2) + Math.pow((x[2] - y[2]),2)) < 4 ) {
+                if (cups[i]==1) {
+                  cups[i]=0; 
+                  return 1; }
+                else
+                  return 0; }
+              break;
+              }
+            case 9: {
+              checker = model_transform.times(cup_coords[9]).times(Mat4.translation([0,0,-2]));
+              x = (checker.times(Vec.of(0,0,0,1))).to3();
+              y = (cup_coords[9].times(Vec.of(0,0,0,1))).to3();
+              if( Math.sqrt(Math.pow((x[0] - y[0]),2) + Math.pow((x[2] - y[2]),2)) < 4 ) {
+                if (cups[i]==1) {
+                  cups[i]=0; 
+                  return 1; }
+                else
+                  return 0; }
+              break;
+              }
+          }
+        }
+        return 0;
+      }
+
+
+    play_audio(when, time, delta_time, filepath) {
+      if (time > when && time < (delta_time+when)) {
+        let beat = new Audio(filepath);
+        beat.play();
+      }
+    }
+
+  display( graphics_state )
+    { var model_transform = Mat4.identity();             // We begin with a brand new model_transform every frame.
+      
+      // *** Lights: *** Values of vector or point lights over time.  Two different lights *per shape* supported by Phong_Shader; more requires changing a number in the vertex 
+      graphics_state.lights = [ new Light( Vec.of(  30,  30,  34, 1 ), Color.of( .4, .4, .4, 1 ), 100000 ),      // shader.  Arguments to construct a Light(): Light source position
+                                new Light( Vec.of( -10, -20, -14, 0 ), Color.of( 1, 1, 1, 1 ), 100    ) ];    // or vector (homogeneous coordinates), color, and size.  
+
+
+      let start_strings = [ "On a fateful Thursday evening, with", "engineering coursework strangely", "light, you find yourself wandering", "frat row.", "You somehow slip into a frat party,", "and find yourself challenged to a", "game of cup pong by residents:", "Brad, Tad, and Fratboy McChad.", "Unfortunately, you've been crushed", "0-10. But McChad is a bit too cocky.", "He says:", "\"If you can hit just TWO cups, I'll", "call it your win. I'll even give", "you 5 balls!\"", "Show them what you've learned about", "physics! School them in linear", "algebra! Hit those shots!", "Scroll with (enter)", "or", "Skip with (space)" ];
+
+      var pregame = (graphics_state.game_state < 0 || graphics_state.game_state == 4);
+      this.shapes.square.draw( graphics_state, Mat4.translation([0,0,20]).times(Mat4.scale([pregame*100,pregame*100,pregame*100])), this.blackPlastic );
+      for (var i = 0; i < 4; i++) {
+        if(graphics_state.game_state < 0) {
+          this.shapes.text.set_string(start_strings[14+graphics_state.game_state + i]);
+          this.shapes.text.draw( graphics_state, Mat4.translation([-2.75,12.5 - i*.5,20.5]).times(Mat4.scale([(graphics_state.game_state < 0)*.1,(graphics_state.game_state < 0)*.1,(graphics_state.game_state < 0)*.1])), this.text_image);
+
+
+          this.shapes.text.set_string(start_strings[19]);
+          this.shapes.text.draw( graphics_state, Mat4.translation([1.25, 9, 20.5]).times(Mat4.scale([pregame*.1,pregame*.1,pregame*.1])), this.text_image)
+          this.shapes.text.set_string(start_strings[18]);
+          this.shapes.text.draw( graphics_state, Mat4.translation([0, 9, 20.5]).times(Mat4.scale([pregame*.1,pregame*.1,pregame*.1])), this.text_image)
+          this.shapes.text.set_string(start_strings[17]);
+          this.shapes.text.draw( graphics_state, Mat4.translation([-3.75, 9, 20.5]).times(Mat4.scale([pregame*.1,pregame*.1,pregame*.1])), this.text_image)
+        }
+      }
+
+      var end_string = "Jk, that's all. Thanks for playing!"
+      if (graphics_state.game_state == 4) {
+        this.shapes.text.set_string(end_string);
+        this.shapes.text.draw(graphics_state, Mat4.translation([-2.75, 12, 20.5]).times(Mat4.scale([pregame*.1,pregame*.1,pregame*.1])), this.text_image);
+      }
+
+
+
+      var t = graphics_state.animation_time/1000;
+      var t2 = graphics_state.animation_time2/1000;
+      var dt = graphics_state.animation_delta_time/1000;
+
+
+
+      this.play_audio(2, t, dt, "assets/beat.mp3");
+
+
+
+      var floor_transform = model_transform.times(Mat4.translation([0, -6.25, 0])).times(Mat4.rotation(Math.PI/2, Vec.of( 1, 0, 0 ))).times(Mat4.scale([25,25,25]));
+      this.shapes.square.draw( graphics_state, floor_transform, this.wood );
+      var wall_transform = model_transform.times(Mat4.translation([0,18.75,-25])).times(Mat4.scale([25,25,25]));
+      this.shapes.square.draw( graphics_state, wall_transform, this.greyWall );
+      wall_transform.pre_multiply(Mat4.rotation(Math.PI/2, Vec.of(0,1,0)));
+      this.shapes.square.draw( graphics_state, wall_transform, this.greyWall );
+      wall_transform.pre_multiply(Mat4.rotation(Math.PI, Vec.of(0,1,0)));
+      this.shapes.square.draw( graphics_state, wall_transform, this.greyWall );
+
+      this.shapes.table.draw( graphics_state, model_transform, this.wood2 );
+
+      /* Draw the 10 cups slightly on the table */
+      var temp_transform = Mat.of(...model_transform);
+
+      //cups.fill(1);
+      var cup_coords = new Array(10);
+
+      temp_transform.post_multiply( Mat4.translation([ -2.25, 0.251, -9.5 ]) );
+      for ( var i = 0; i < 4; i++ ) {
+        this.draw_cup(graphics_state, temp_transform.times(Mat4.scale([graphics_state.cups[i],graphics_state.cups[i],graphics_state.cups[i]])));
+        cup_coords[i] = Mat.of(...temp_transform);
+        temp_transform.post_multiply( Mat4.translation([ 1.5, 0, 0 ]) );
+      }
+      temp_transform.post_multiply( Mat4.translation([ -2.25, 0, 1.325 ]) );
+      for( var i = 0; i < 3; i++ ) {
+        this.draw_cup(graphics_state, temp_transform.times(Mat4.scale([graphics_state.cups[i+4],graphics_state.cups[i+4],graphics_state.cups[i+4]])));
+        cup_coords[i+4] = Mat.of(...temp_transform);
+        temp_transform.post_multiply( Mat4.translation([ -1.5, 0, 0 ]) );
+      }
+      temp_transform.post_multiply( Mat4.translation([ 2.25, 0, 1.325 ]) );
+      for( var i = 0; i < 2; i++ ) {
+        this.draw_cup(graphics_state, temp_transform.times(Mat4.scale([graphics_state.cups[i+7],graphics_state.cups[i+7],graphics_state.cups[i+7]])));
+        cup_coords[i+7] = Mat.of(...temp_transform);
+        temp_transform.post_multiply( Mat4.translation([ 1.5, 0, 0 ]) );
+      }
+      temp_transform.post_multiply( Mat4.translation([ -2.25, 0, 1.325 ]) );
+      this.draw_cup(graphics_state, temp_transform.times(Mat4.scale([graphics_state.cups[9],graphics_state.cups[9],graphics_state.cups[9]])));
+      cup_coords[9] = Mat.of(...temp_transform);
+
+      //this.shapes.sphere.draw( graphics_state, model_transform.times(Mat4.translation([0,2,-8.5])), this.pong );
+
+      var wacky_check = (graphics_state.game_state == 2 || graphics_state.game_state == 3);
+
+      /* Make Chad */
+      var chad_transform = Mat4.scale([3,3,3]).times(Mat4.translation([0,0,-4.5]));
+      var wacky_chad = Mat4.translation([0,(wacky_check)*(0.5+Math.sin(8*t)),0]);
+      chad_transform.post_multiply(wacky_chad);
+      this.shapes.cup.draw( graphics_state, chad_transform, this.redPlastic );
+      var neck_transform = chad_transform.times(Mat4.translation([0,1.5,0])).times(Mat4.scale([1.5,1,1.5]));
+      this.shapes.disk.draw( graphics_state, neck_transform, this.redPlastic );
+      neck_transform.post_multiply(Mat4.scale([0.5,0.5,0.5])).post_multiply(Mat4.translation([0,1.5,0])).post_multiply(Mat4.rotation(Math.PI, Vec.of(1,0,0)));
+      this.shapes.cup.draw( graphics_state, neck_transform, this.skin );
+      var head_transform = neck_transform.times(Mat4.scale([6/9,1,6/9])).times(Mat4.rotation(Math.PI/2, Vec.of(0,1,0))).times(Mat4.scale([1.1,1.1,1.1]));
+      head_transform.post_multiply(Mat4.rotation(.15 + .3*Math.sin(5*t), Vec.of(0,1,0)));
+      this.shapes.sphere.draw( graphics_state, head_transform, wacky_check ? this.madchad : this.chad );
+
+      for (let i of [-1,1]) {
+        var wacky_chad_bicep = Mat4.rotation((wacky_check)*i*(Math.PI/4-Math.PI/4*Math.sin(2*t)), Vec.of(0,0,1));
+        var bicep = chad_transform.times(Mat4.scale([.75,.75,.75])).times(Mat4.translation([i*1.5,1.5,0]));
+        bicep.post_multiply(wacky_chad_bicep);
+        bicep.post_multiply(Mat4.translation([0,-.75,0]));
+        this.draw_limb(graphics_state, bicep, this.skin);
+        bicep.post_multiply(Mat4.translation([i*.5,-.625,0]));
+        wacky_chad_bicep.post_multiply(Mat4.translation([(wacky_check)*i*(.5-.5*Math.sin(2*t)),0,0]));
+        bicep.post_multiply(wacky_chad_bicep);
+        bicep.post_multiply(Mat4.translation([-i*.5,-.625,0])).times(Mat4.scale([.85,1,.85]));
+        this.draw_limb(graphics_state, bicep, this.skin);
+        bicep.post_multiply(Mat4.translation([0,-.5,0])).post_multiply(Mat4.rotation(-i*Math.PI/4, Vec.of(0,1,0))).post_multiply(Mat4.scale([.35,.35,.15]));
+        wacky_chad_bicep = Mat4.rotation((wacky_check)*i*(Math.PI/6-Math.PI/6*Math.sin(2*t)), Vec.of(0,0,1));
+        bicep.post_multiply(wacky_chad_bicep);
+        this.shapes.cube.draw(graphics_state, bicep, this.skin);
+      }
+      for (let i of [-1,1]) {
+        var thigh = chad_transform.times(Mat4.scale([.5,.5,.5])).times(Mat4.translation([i*.5,-1.25,0]));
+        this.draw_limb(graphics_state, thigh, this.greyPlastic);
+        thigh.post_multiply(Mat4.translation([0,-1.75,0])).post_multiply(Mat4.scale([1,1.25,1]));
+        this.draw_limb(graphics_state, thigh, this.greyPlastic);
+        thigh.post_multiply(Mat4.rotation(i*Math.PI/8, Vec.of(0,1,0))).post_multiply(Mat4.translation([i*.15,-.575,.5])).post_multiply(Mat4.scale([.4,.35,1]));
+        this.shapes.cube.draw(graphics_state, thigh, this.redPlastic);
+      }
+
+
+      /* Brad */
+      var brad_transform = Mat4.scale([2.5,3.5,3]).times(Mat4.translation([2,0,-8]));
+      brad_transform.pre_multiply(Mat4.rotation(-.3,Vec.of(0,1,0)));
+      var wacky_brad = Mat4.rotation((wacky_check)*(0.5*Math.sin(4*t)),Vec.of(0,1,0));
+      brad_transform.post_multiply(wacky_brad);
+      this.shapes.cup.draw( graphics_state, brad_transform, this.yellowPlastic );
+      var neck_transform = brad_transform.times(Mat4.translation([0,1.5,0])).times(Mat4.scale([1.5,1,1.5]));
+      this.shapes.disk.draw( graphics_state, neck_transform, this.yellowPlastic );
+      neck_transform.post_multiply(Mat4.scale([3/2.5,3/3.5,1]));
+      neck_transform.post_multiply(Mat4.scale([0.5,0.5,0.5])).post_multiply(Mat4.translation([0,1.5,0])).post_multiply(Mat4.rotation(Math.PI, Vec.of(1,0,0)));
+      this.shapes.cup.draw( graphics_state, neck_transform, this.skin2 );
+      var head_transform = neck_transform.times(Mat4.scale([6/9,1,6/9])).times(Mat4.rotation(Math.PI/2, Vec.of(0,1,0))).times(Mat4.scale([1.1,1.1,1.1]));
+      head_transform.post_multiply(Mat4.rotation(.15 + (wacky_check ? 1 : .3)*Math.sin((wacky_check ? 8 : 5)*t), Vec.of(0,1,0)));
+      this.shapes.sphere.draw( graphics_state, head_transform, wacky_check ? this.madbrad : this.brad );
+
+      for (let i of [-1,1]) {
+        var wacky_brad_bicep = Mat4.rotation((wacky_check)*i*(Math.PI/2), Vec.of(0,0,1));
+        var bicep = brad_transform.times(Mat4.scale([.75,.6,.75])).times(Mat4.translation([i*1.5,2,0]));
+        bicep.post_multiply(wacky_brad_bicep);
+        bicep.post_multiply(Mat4.translation([0,-.75,0]));
+        this.draw_limb(graphics_state, bicep, this.skin2);
+        bicep.post_multiply(Mat4.translation([i*.5,-.625,0]));
+        wacky_brad_bicep.post_multiply(Mat4.translation([i*(wacky_check)*.75,0,0]).times((Mat4.rotation((wacky_check)*i*Math.PI/4, Vec.of(0,0,1)))));
+        bicep.post_multiply(wacky_brad_bicep);
+        bicep.post_multiply(Mat4.translation([-i*.5,-.625,0])).times(Mat4.scale([.85,1,.85]));
+        this.draw_limb(graphics_state, bicep, this.skin2);
+        bicep.post_multiply(Mat4.translation([0,-.5,0])).post_multiply(Mat4.rotation(-i*Math.PI/4, Vec.of(0,1,0))).post_multiply(Mat4.scale([.35,.35,.15]));
+        wacky_brad_bicep = Mat4.rotation((wacky_check)*i*(Math.PI/6-Math.PI/6*Math.sin(2*t)), Vec.of(0,0,1));
+        //bicep.post_multiply(wacky_brad_bicep);
+        this.shapes.cube.draw(graphics_state, bicep, this.skin2);
+      }
+      for (let i of [-1,1]) {
+        var thigh = brad_transform.times(Mat4.scale([.5,.5,.5])).times(Mat4.translation([i*.5,-1.25,0]));
+        this.draw_limb(graphics_state, thigh, this.greyPlastic);
+        thigh.post_multiply(Mat4.translation([0,-1.75,0])).post_multiply(Mat4.scale([1,1.25,1]));
+        this.draw_limb(graphics_state, thigh, this.greyPlastic);
+        thigh.post_multiply(Mat4.rotation(i*Math.PI/8, Vec.of(0,1,0))).post_multiply(Mat4.translation([i*.15,-.575,.5])).post_multiply(Mat4.scale([.4,.35,1]));
+        this.shapes.cube.draw(graphics_state, thigh, this.blackPlastic);
+      }
+
+
+
+
+
+      /* Tad */
+      var tad_transform = Mat4.scale([2.8,2.8,3]).times(Mat4.translation([-2,0,-8]));
+      tad_transform.pre_multiply(Mat4.rotation(.7,Vec.of(0,1,0)))
+      var wacky_tad = Mat4.translation([(wacky_check)*(0.5+0.25*Math.sin(1.5*t)),(wacky_check)*(0.5+Math.sin(4*t)),0]);
+      tad_transform.post_multiply(wacky_tad);
+      this.shapes.cup.draw( graphics_state, tad_transform, this.bluePlastic );
+      var neck_transform = tad_transform.times(Mat4.translation([0,1.5,0])).times(Mat4.scale([1.5,1,1.5]));
+      this.shapes.disk.draw( graphics_state, neck_transform, this.bluePlastic );
+      neck_transform.post_multiply(Mat4.scale([3/2.8,3/2.8,1]));
+      neck_transform.post_multiply(Mat4.scale([0.5,0.5,0.5])).post_multiply(Mat4.translation([0,1.5,0])).post_multiply(Mat4.rotation(Math.PI, Vec.of(1,0,0)));
+      this.shapes.cup.draw( graphics_state, neck_transform, this.skin3 );
+      var head_transform = neck_transform.times(Mat4.scale([6/9,1,6/9])).times(Mat4.rotation(Math.PI/2, Vec.of(0,1,0))).times(Mat4.scale([1.1,1.1,1.1]));
+      head_transform.post_multiply(Mat4.rotation(.15 + .3*Math.sin(5*t), Vec.of(0,1,0)));
+      this.shapes.sphere.draw( graphics_state, head_transform, wacky_check ? this.madtad : this.tad );
+
+      for (let i of [-1,1]) {
+        var wacky_tad_bicep = Mat4.rotation((wacky_check)*i*(Math.PI/2), Vec.of(0,0,1)).times(Mat4.rotation((wacky_check)*-(.5-.25*Math.sin(3*t)),Vec.of(1,0,0)));
+        var bicep = tad_transform.times(Mat4.scale([.6,.75,.75])).times(Mat4.translation([i*1.75,1.5,0]));
+        bicep.post_multiply(wacky_tad_bicep);
+        bicep.post_multiply(Mat4.translation([0,-.75,0]));
+        this.draw_limb(graphics_state, bicep, this.greenPlastic);
+        bicep.post_multiply(Mat4.translation([i*.5,-.625,0]));
+        wacky_tad_bicep = Mat4.rotation((wacky_check)*-1*(1-Math.sin(4*t)),Vec.of(1,0,0));
+        bicep.post_multiply(wacky_tad_bicep);
+        bicep.post_multiply(Mat4.translation([-i*.5,-.625,0])).times(Mat4.scale([.85,1,.85]));
+        this.draw_limb(graphics_state, bicep, this.skin3);
+        bicep.post_multiply(Mat4.translation([0,-.5,0])).post_multiply(Mat4.rotation(-i*Math.PI/4, Vec.of(0,1,0))).post_multiply(Mat4.scale([.35,.35,.15]));
+        //wacky_tad_bicep = Mat4.rotation((graphics_state.game_state==2)*i*(Math.PI/6-Math.PI/6*Math.sin(2*t)), Vec.of(0,0,1));
+        //bicep.post_multiply(wacky_tad_bicep);
+        this.shapes.cube.draw(graphics_state, bicep, this.skin3);
+      }
+      for (let i of [-1,1]) {
+        var thigh = tad_transform.times(Mat4.scale([.5,.5,.5])).times(Mat4.translation([i*.5,-1.25,0]));
+        var wacky_tad_legs = Mat4.rotation((wacky_check)*(-.5+.25*Math.sin(4*t)), Vec.of(1,0,0)).times(Mat4.translation([0,-.25,(wacky_check)*(+.5-.25*Math.sin(4*t))]));
+        thigh.post_multiply(wacky_tad_legs);
+        this.draw_limb(graphics_state, thigh, this.greyPlastic);
+        wacky_tad_legs = Mat4.translation([0,.25,0*-1*(wacky_check)*(+.5-.25*Math.sin(4*t))]).times(Mat4.rotation((wacky_check)*1*(.75+.5*Math.sin(4*t)), Vec.of(1,0,0)));
+        thigh.post_multiply(wacky_tad_legs);
+        thigh.post_multiply(Mat4.translation([0,-2,0])).post_multiply(Mat4.scale([1,1.25,1]));
+        this.draw_limb(graphics_state, thigh, this.greyPlastic);
+        thigh.post_multiply(Mat4.rotation(i*Math.PI/8, Vec.of(0,1,0))).post_multiply(Mat4.translation([i*.15,-.575,.5])).post_multiply(Mat4.scale([.4,.35,1]));
+        this.shapes.cube.draw(graphics_state, thigh, this.greenPlastic);
+      }
+
+
+      /* Controls HUDs */
+
+      var hud = "Balls Left: " + graphics_state.ball_count;
+      this.shapes.text.set_string(hud);
+      var scalar = (graphics_state.game_state > -1 && graphics_state.game_state != 4)*.01;
+      var hud_transform = Mat4.inverse(graphics_state.camera_transform.times(Mat4.translation([.235,-.025,.5])));
+      hud_transform.post_multiply(Mat4.scale([scalar,scalar,scalar]));
+      this.shapes.text.draw( graphics_state, hud_transform, this.text_image);
+
+
+
+      let win = ["You killed it!", "Press (enter) for Level 2!"];
+      this.shapes.text.set_string(win[0]);
+      var win_scalar = (graphics_state.game_state == 3);
+      var win_transform = Mat4.inverse(graphics_state.camera_transform.times(Mat4.translation([.1+.1*Math.abs(Math.sin(t)),.225,.5])));
+      win_transform.post_multiply(Mat4.scale([win_scalar*(.01+.01*Math.abs(Math.sin(t))),win_scalar*(.01+.01*Math.abs(Math.sin(t))),win_scalar*(.01+.01*Math.abs(Math.sin(t)))]));
+
+      this.shapes.text.draw( graphics_state, win_transform, this.text_image);
+      this.shapes.text.set_string(win[1]);
+      win_transform = Mat4.inverse(graphics_state.camera_transform.times(Mat4.translation([.19,.275,.5])));
+      win_transform.post_multiply(Mat4.scale([win_scalar*.01,win_scalar*.01,win_scalar*.01]));
+      this.shapes.text.draw( graphics_state, win_transform, this.text_image);
+
+
+
+      let lose = "Sorry dude, you got shut out!";
+      this.shapes.text.set_string(lose);
+      var lose_scalar = (((graphics_state.game_state == 0 || graphics_state.game_state == 2) && (graphics_state.hit_count < 2 && graphics_state.ball_count == 0 && !graphics_state.ball_in_air))   ||   (graphics_state.game_state == 1 && graphics_state.ball_count == 0));
+      var lose_transform = Mat4.inverse(graphics_state.camera_transform.times(Mat4.translation([.19,.225,.5])));
+      lose_transform.post_multiply(Mat4.scale([lose_scalar*.01,lose_scalar*.01,lose_scalar*.01]));
+      this.shapes.text.draw( graphics_state, lose_transform, this.text_image);
+
+      /* Ball */
+      
+      var ball_transform = Mat4.inverse(graphics_state.camera_transform.times(Mat4.translation([0,7,10])));
+      ball_transform.post_multiply(Mat4.scale([3/10,3/10,3/10]));
+
+      var t_offset = t - graphics_state.throw_time/1000;
+
+      var y_move = graphics_state.thrown*(100*t_offset-65*t_offset*t_offset);
+      var z_move = graphics_state.thrown*(-60*t_offset);
+      this.shapes.sphere.draw( graphics_state, ball_transform.times(Mat4.translation([0, y_move, z_move])), this.pong );
+
+
+      var ball_replay = Mat4.translation([ 0, -5,-30 ]).times(Mat4.rotation(.3, Vec.of(1,0,0))).times(Mat4.translation([0,7,10]));
+
+      var world_coordinates = Mat4.inverse(ball_transform.times(Mat4.translation([0, y_move, z_move])));
+      
+
+
+      if ( y_move < -3.5 && y_move > -5) {
+        var result = this.check_cups(cup_coords, world_coordinates, graphics_state.cups);
+        graphics_state.game_state += result;
+        graphics_state.hit_count += result;
+      }
+
+      if (graphics_state.game_state == 3 && z_move < -200)
+        for (var k = 0; k < 10; k++)
+          graphics_state.cups[k] = 0;
+      //else if (graphics_state.game_state == 2 && graphics_state.ball_count == 0 && graphics_state.hit_count !=2) {}
+
+
+      if (graphics_state.game_state == 1 && y_move < -300 && graphics_state.ball_count > 0) {
+
+
+        var i = 0;
+        let temp = Mat4.identity();
+        for (; i < 10; i++)
+          if (!graphics_state.cups[i]) { break; }
+
+        this.draw_cup( graphics_state, cup_coords[i] );
+
+        var eye = Vec.of(10,5,0,1);
+        let pre_at = cup_coords[i].times(Mat4.translation([0,2,0])).times(Mat4.translation([0,(z_move > -300)*(z_move+300) ,0])).times(Mat4.scale([.5,.5,.5]));
+        var at =  pre_at.times(Vec.of(0,0,0,1)).minus(eye);
+        this.shapes.sphere.draw( graphics_state, pre_at, this.pong);
+        temp = graphics_state.camera_transform;
+        graphics_state.camera_transform = Mat4.look_at( eye, at, Vec.of(at[1],-at[0],0));
+
+       var replay = "NICE SHOT!";
+        this.shapes.text.set_string(replay);
+        var replay_scalar = (graphics_state.game_state == 1);
+        var replay_hud = Mat4.inverse(graphics_state.camera_transform.times(Mat4.translation([5,2.5,1])).times(Mat4.rotation(.3,Vec.of(0,1,0))));
+        replay_hud.post_multiply(Mat4.scale([replay_scalar*(.25+.01*Math.abs(Math.sin(5*t))),replay_scalar*(.25+.01*Math.abs(Math.sin(5*t))),replay_scalar*(.25+.01*Math.abs(Math.sin(5*t)))]));
+        this.shapes.text.draw( graphics_state, replay_hud, this.text_image);
+        //this.shapes.sphere.draw( graphics_state, replay_hud, this.pong);
+
+
+
+        if (z_move < -500) {
+          graphics_state.game_state++;
+          graphics_state.camera_transform = Mat4.translation([ 0, -5,-30 ]).times(Mat4.rotation(.3, Vec.of(1,0,0)));
+          graphics_state.ball_in_air = 0;
+        }
+        /*else if (graphics_state.game_state == 0 && y_move < -300)
+          if ( !ball_in_air ) {
+            ball_transform = Mat4.inverse(graphics_state.camera_transform.times(Mat4.translation([0,7,10])));
+            ball_transform.post_multiply(Mat4.scale([3/10,3/10,3/10]));
+          }*/
+
+    }
+  }
+}
+
+</script>
+<style>
+  table { border-collapse: collapse; display:block; overflow-x: auto; }
+  table, th, td { border: 2px solid black; vertical-align: top; white-space: nowrap }
+  th, td { overflow: hidden;  }
+  button { position: relative; background-color: #4C9F50; color: white; padding: 6px; box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2); transition: background-color .3s, transform .3s }
+  button:hover, button:focus { transform: scale(1.2); color:gold }
+  .dropdown { display:inline-block }
+  .dropdown-content { display: none; position: absolute; background-color: #f9f9f9; min-width: 100px; overflow: auto; box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2) }
+  .dropdown-content a { color: black; padding: 4px 4px; display: block }
+  .dropdown a:hover { background-color: #f1f1f1 }
+  .show { display:inline-block }
+</style>
+</head><body>
+<div id="explanation_section"></div>
+<div id="canvases"></div>
+<table id="control_buttons" class="dropdown" style="display:block; width: 70%;  border: 0px; margin: 0 0 50px 0"><tr></tr></table>
+<div id="code_panel" style="font-family: monospace; white-space: pre; margin: 50px 0" >
+  <div id="code_display"  data-displayed="" ></div>
+  <button id="edit_button" style="display:none">Start editing</button> 
+  <!--<table id="class_list" class="dropdown" style="display:block; border: 0px; border-spacing: 10px " >
+    <tr><td colspan="2">Click below to navigate through all classes that are defined. <br>&nbsp;<br>Main demo: <span name="main_demo_link"></span></td></tr>
+    <tr style="text-align:center"><td>tinywebgl-ucla.js</td><td>dependencies.js</td></tr><tr></tr></table>-->
+</div>
+<form name="new_demo_source_code" style="display:none">  
+  <p style="margin: 50px 0"><i><b>What can I put here?</b></i>  A JavaScript class, with any valid JavaScript inside.  Your code can use classes from this demo, or from ANY demo on the 
+  encyclopedia of code --  the dependencies will automatically be pulled in to run your demo!<br></p>
+  <textarea rows="30" cols="140" name="new_demo_code"></textarea><br>
+  <div id="submit_result" style="margin: 10px 0"></div>
+  <button type="submit" style="margin: 0px 50px 0px 0px">Save as new webpage</button> 
+  <input type="text" name="author"   placeholder="Author name">
+  <input type="text" name="password" placeholder="Password" style="display:none">
+  <span id="overwrite_panel" style="display:none"><label>Overwrite?<input type="checkbox" name="overwrite" autocomplete="off"></label></span>
+  <span id="beginner_panel"><label>Beginner Mode<input type="checkbox" checked onchange="document.querySelector('#expert_panel').style.display='block'; beginner_panel.style.display='none'"></label></span>
+ <!-- <div id="expert_panel" style="display:none;"><label><input type="checkbox" name="finished" autocomplete="off">
+    Optional:  This demo is finished; consider it for public listing on the main page.  
+    I believe that this demo is the one true way to minimalistically do what its name says.
+    The code's readability and structure are so good as to maximize how easy it is to memorize it.
+    </label></div>  -->
+</form>
+</body></html>
