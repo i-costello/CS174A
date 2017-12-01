@@ -35,4 +35,4 @@ I used look_at() when graphics.state.game_state is 1 (i.e. during the “Replay”).
 
 Limitations:
 
-There are a few bugs I did not have time to fix, such as the character’s unlimited movement and miscalculating the ball’s position relative to given cups occasionally. Otherwise, the gameplay seems robust. I also hoped to loop the audio and decrease its volume, but I believe its inclusion as-is is preferable to silence. Finally, I intended to implement a reset function to restart the game without reloading the page.
+There are a few bugs I did not have time to fix, such as the character’s unlimited movement and miscalculating the ball’s position relative to given cups occasionally. Otherwise, the gameplay seems robust. I also hoped to loop the audio and decrease its volume, but I believe its inclusion as-is is preferable to silence. Finally, I intended to implement a reset function to restart the game without reloading the page. I plan to revisit and correct these bugs at the end of this quarter.
